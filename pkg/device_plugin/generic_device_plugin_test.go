@@ -116,8 +116,9 @@ var _ = Describe("Generic Device", func() {
 		basePath = workDir
 
 		devs = append(devs, &pluginapi.Device{
-			ID:     iommuGroup1,
-			Health: pluginapi.Healthy,
+			ID:       iommuGroup1,
+			Health:   pluginapi.Healthy,
+			Topology: &pluginapi.TopologyInfo{Nodes: []*pluginapi.NUMANode{{ID: 0}}},
 		})
 		devs = append(devs, &pluginapi.Device{
 			ID:     iommuGroup2,
