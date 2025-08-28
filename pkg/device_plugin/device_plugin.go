@@ -35,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	klog "k8s.io/klog/v2"
@@ -62,6 +63,9 @@ var vGpuMap map[string][]NvidiaGpuDevice
 // Key is the Nvidia GPU id and value is the list of associated vGPU ids
 var gpuVgpuMap map[string][]string
 
+// deviceNumaMap is a map of iommu group id to NUMA node id
+var deviceNumaMap map[string]uint
+
 var basePath = "/sys/bus/pci/devices"
 
 // rootPath can be set for testing to simplify testing
@@ -74,6 +78,7 @@ var startDevicePlugin = startDevicePluginFunc
 var readVgpuIDFromFile = readVgpuIDFromFileFunc
 var readGpuIDForVgpu = readGpuIDForVgpuFunc
 var startVgpuDevicePlugin = startVgpuDevicePluginFunc
+var readNUMAnodeIDFromFile = readNUMAnodeIDFromFileFunc
 var stop = make(chan struct{})
 
 func InitiateDevicePlugin() {
@@ -99,10 +104,14 @@ func createDevicePlugins() {
 	for k, v := range deviceMap {
 		devs = nil
 		for _, dev := range v {
-			devs = append(devs, &pluginapi.Device{
+			d := pluginapi.Device{
 				ID:     dev,
 				Health: pluginapi.Healthy,
-			})
+			}
+			if numaId, ok := deviceNumaMap[dev]; ok {
+				d.Topology = &pluginapi.TopologyInfo{Nodes: []*pluginapi.NUMANode{{ID: int64(numaId)}}}
+			}
+			devs = append(devs, &d)
 		}
 		deviceName := getDeviceName(k)
 		if deviceName == "" {
@@ -165,6 +174,7 @@ func startVgpuDevicePluginFunc(dp *GenericVGpuDevicePlugin) error {
 func createIommuDeviceMap() {
 	iommuMap = make(map[string][]NvidiaGpuDevice)
 	deviceMap = make(map[string][]string)
+	deviceNumaMap = make(map[string]uint)
 	//Walk directory to discover pci devices
 	filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -209,6 +219,13 @@ func createIommuDeviceMap() {
 					deviceMap[deviceID] = append(deviceMap[deviceID], iommuGroup)
 				}
 				iommuMap[iommuGroup] = append(iommuMap[iommuGroup], NvidiaGpuDevice{info.Name()})
+				numaID, err := readNUMAnodeIDFromFile(basePath, info.Name())
+				if err != nil {
+					log.Printf("Could not get numa node id for device %s: %s\n", info.Name(), err.Error())
+				} else if numaID >= 0 { // if numaID == -1, it means no numa node is assigned
+					log.Printf("Numa %d\n", numaID)
+					deviceNumaMap[iommuGroup] = uint(numaID)
+				}
 			}
 		}
 		return nil
@@ -372,4 +389,16 @@ func locateVendor(pciIdsFile *os.File, vendorID string) (*bufio.Scanner, error) 
 	}
 
 	return scanner, fmt.Errorf("failed to find vendor id in pci.ids file: %s", vendorID)
+}
+
+func readNUMAnodeIDFromFileFunc(basePath string, deviceAddress string) (int, error) {
+	numaContent, err := os.ReadFile(filepath.Join(basePath, deviceAddress, "numa_node"))
+	if err != nil {
+		return 0, fmt.Errorf("could not read numa node id for device: %w", err)
+	}
+	numaID, err := strconv.ParseInt(strings.Trim(string(numaContent), " \n"), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("could not convert numa_node content (%s) to id: %w", numaContent, err)
+	}
+	return int(numaID), nil
 }

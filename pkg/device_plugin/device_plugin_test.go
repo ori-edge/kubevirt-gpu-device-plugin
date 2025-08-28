@@ -97,6 +97,16 @@ func getFakeIDFromFileDevicePlugin(basePath string, deviceAddress string, link s
 	return "", errors.New("Incorrect operation")
 }
 
+func getFakeNumaIDDevicePlugin(basePath string, deviceAddress string) (int, error) {
+	if deviceAddress == deviceAddress1 {
+		return 0, nil
+	}
+	if deviceAddress == deviceAddress2 {
+		return 1, nil
+	}
+	return -1, nil
+}
+
 func fakeStartDevicePluginFunc(dp *GenericDevicePlugin) error {
 	if dp.deviceName == deviceName {
 		return errors.New("Incorrect operation")
@@ -186,6 +196,39 @@ var _ = Describe("Device Plugin", func() {
 		})
 	})
 
+	Context("readNUMAnodeIDFromFileFunc() Tests", func() {
+		BeforeEach(func() {
+			workDir, err = os.MkdirTemp("", "kubevirt-test")
+			Expect(err).ToNot(HaveOccurred())
+			err = os.Mkdir(workDir+"/"+deviceAddress1, 0755)
+			Expect(err).ToNot(HaveOccurred())
+			err = os.Mkdir(workDir+"/"+deviceAddress3, 0755)
+			Expect(err).ToNot(HaveOccurred())
+			err = os.WriteFile(filepath.Join(workDir, deviceAddress1, "numa_node"), []byte("0"), 0644)
+			Expect(err).ToNot(HaveOccurred())
+			err = os.WriteFile(filepath.Join(workDir, deviceAddress3, "numa_node"), []byte("-1"), 0644)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Read numa_node without error", func() {
+			numaID, err := readNUMAnodeIDFromFileFunc(workDir, deviceAddress1)
+			Expect(err).To(BeNil())
+			Expect(numaID).To(BeEquivalentTo(0))
+		})
+
+		It("Read numa id from a missing location to throw error", func() {
+			_, err := readNUMAnodeIDFromFileFunc(workDir, deviceAddress2)
+			Expect(err).ToNot(BeNil())
+		})
+
+		It("Read -1 numa_node without error", func() {
+			numaID, err := readNUMAnodeIDFromFileFunc(workDir, deviceAddress3)
+			Expect(err).To(BeNil())
+			Expect(numaID).To(BeEquivalentTo(-1))
+		})
+
+	})
+
 	Context("readVgpuIDFromFile() Tests", func() {
 		BeforeEach(func() {
 			readVgpuIDFromFile = readVgpuIDFromFileFunc
@@ -273,12 +316,16 @@ var _ = Describe("Device Plugin", func() {
 			readLink = getFakeLinkDevicePlugin
 			readIDFromFile = getFakeIDFromFileDevicePlugin
 			startDevicePlugin = fakeStartDevicePluginFunc
+			readNUMAnodeIDFromFile = getFakeNumaIDDevicePlugin
 			createIommuDeviceMap()
 
 			iommuList := iommuMap["io_1"]
 			Expect(iommuList[0].addr).To(Equal("1"))
 			deviceList := deviceMap["1b80"]
 			Expect(deviceList[0]).To(Equal("io_1"))
+
+			Expect(deviceNumaMap).To(HaveKeyWithValue("io_1", BeEquivalentTo(0)))
+			Expect(deviceNumaMap).To(HaveKeyWithValue("io_2", BeEquivalentTo(1)))
 
 			go createDevicePlugins()
 			time.Sleep(3 * time.Second)
